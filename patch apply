@@ -1,0 +1,196 @@
+*** Begin Patch
+*** Delete File: src/components/Hedgefunddashboard.jsx
+*** Add File: src/components/Hedgefunddashboard.js
++// src/components/Hedgefunddashboard.js
++// Plain JS React component using UMD React and ReactDOM (no npm required)
++// Usage: include React and ReactDOM UMD bundles in your HTML, then include this script.
++// Example HTML snippet provided below.
++
++(function(global) {
++  // Simple axios-like fetch wrapper using fetch API
++  function apiGet(path) {
++    var base = (global.__HF_API_BASE__ || '').replace(/\/$/, '');
++    var url = base + path;
++    var token = (global.__HF_TOKEN__ || '');
++    var headers = { 'Accept': 'application/json' };
++    if (token) headers['Authorization'] = 'Bearer ' + token;
++    return fetch(url, { method: 'GET', headers: headers, credentials: 'same-origin' })
++      .then(function(res) {
++        if (!res.ok) return res.text().then(function(t){ throw new Error(t || res.statusText); });
++        return res.json();
++      });
++  }
++
++  function apiPost(path, body) {
++    var base = (global.__HF_API_BASE__ || '').replace(/\/$/, '');
++    var url = base + path;
++    var token = (global.__HF_TOKEN__ || '');
++    var headers = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
++    if (token) headers['Authorization'] = 'Bearer ' + token;
++    return fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body), credentials: 'same-origin' })
++      .then(function(res) {
++        if (!res.ok) return res.text().then(function(t){ throw new Error(t || res.statusText); });
++        return res.json();
++      });
++  }
++
++  // WebSocket helper
++  function createWs(url, onMessage) {
++    var ws = new WebSocket(url);
++    ws.onopen = function() { console.info('WS connected'); };
++    ws.onmessage = function(e) {
++      try { onMessage(JSON.parse(e.data)); } catch (err) { console.error('WS parse', err); }
++    };
++    ws.onerror = function(e) { console.error('WS error', e); };
++    ws.onclose = function(e) { console.info('WS closed', e); };
++    return ws;
++  }
++
++  // Utility: create element shorthand
++  var h = React.createElement;
++
++  // QuickTrade subcomponent
++  function QuickTrade(props) {
++    var state = React.useState({ symbol: 'AAPL', qty: 1, side: 'Buy', busy: false, err: null });
++    var s = state[0], setS = state[1];
++
++    function setField(k, v) { setS(Object.assign({}, s, (function(){ var o={}; o[k]=v; return o; })())); }
++
++    function submit(e) {
++      e && e.preventDefault();
++      setField('busy', true);
++      setField('err', null);
++      props.onPlace(s.symbol, Number(s.qty), s.side)
++        .then(function(){ setField('busy', false); })
++        .catch(function(err){ setField('busy', false); setField('err', err.message || String(err)); });
++    }
++
++    return h('form', { onSubmit: submit, style: { marginTop: 12 } },
++      h('input', { value: s.symbol, onChange: function(e){ setField('symbol', e.target.value.toUpperCase()); }, style: { marginRight: 8 } }),
++      h('input', { type: 'number', value: s.qty, min: 1, onChange: function(e){ setField('qty', e.target.value); }, style: { width: 80, marginRight: 8 } }),
++      h('select', { value: s.side, onChange: function(e){ setField('side', e.target.value); }, style: { marginRight: 8 } },
++        h('option', null, 'Buy'), h('option', null, 'Sell')
++      ),
++      h('button', { type: 'submit', disabled: s.busy }, s.busy ? 'Placing...' : 'Place Order'),
++      s.err ? h('div', { style: { color: 'red', marginTop: 8 } }, s.err) : null
++    );
++  }
++
++  // Main Dashboard component
++  function HedgefundDashboard() {
++    var portfolioState = React.useState(null);
++    var marketState = React.useState({});
++    var ordersState = React.useState([]);
++    var loadingState = React.useState(true);
++    var errorState = React.useState(null);
++
++    var portfolio = portfolioState[0], setPortfolio = portfolioState[1];
++    var marketData = marketState[0], setMarketData = marketState[1];
++    var orders = ordersState[0], setOrders = ordersState[1];
++    var loading = loadingState[0], setLoading = loadingState[1];
++    var error = errorState[0], setError = errorState[1];
++
++    // initial load
++    React.useEffect(function() {
++      var mounted = true;
++      setLoading(true);
++      Promise.all([
++        apiGet('/v1/portfolio'),
++        apiGet('/v1/marketdata?symbols=AAPL,TSLA,MSFT'),
++        apiGet('/v1/orders?limit=50')
++      ]).then(function(results){
++        if (!mounted) return;
++        setPortfolio(results[0]);
++        var mdMap = {};
++        (results[1].data || []).forEach(function(q){ mdMap[q.symbol] = q; });
++        setMarketData(mdMap);
++        setOrders(results[2].orders || []);
++        setError(null);
++      }).catch(function(err){
++        console.error(err);
++        setError(err.message || String(err));
++      }).finally(function(){ if (mounted) setLoading(false); });
++      return function(){ mounted = false; };
++    }, []);
++
++    // WebSocket subscription
++    React.useEffect(function() {
++      var token = global.__HF_TOKEN__ || '';
++      if (!token) return;
++      var wsBase = (global.__HF_WS_BASE__ || '').replace(/\/$/, '');
++      var url = wsBase + '?token=' + encodeURIComponent(token);
++      var ws = createWs(url, function(msg) {
++        if (!msg || !msg.type) return;
++        if (msg.type === 'portfolio_update') setPortfolio(msg.payload);
++        else if (msg.type === 'market_tick') setMarketData(function(prev){ var copy = Object.assign({}, prev); copy[msg.payload.symbol] = msg.payload; return copy; });
++        else if (msg.type === 'order_update') {
++          setOrders(function(prev){
++            var idx = prev.findIndex(function(o){ return o.orderId === msg.payload.orderId; });
++            if (idx === -1) return [msg.payload].concat(prev);
++            var copy = prev.slice();
++            copy[idx] = Object.assign({}, copy[idx], msg.payload);
++            return copy;
++          });
++        }
++      });
++      return function(){ try { ws.close(); } catch(e){} };
++    }, []);
++
++    function placeOrder(symbol, qty, side) {
++      return apiPost('/v1/orders', { symbol: symbol, qty: qty, side: side, type: 'Market', timeInForce: 'GTC' })
++        .then(function(res){
++          setOrders(function(prev){ return [{ orderId: res.orderId, symbol: symbol, qty: qty, side: side, status: res.status, createdAt: res.createdAt }].concat(prev); });
++          return res;
++        });
++    }
++
++    if (loading) return h('div', null, 'Loading dashboard...');
++    if (error) return h('div', { style: { color: 'red' } }, 'Error: ' + error);
++
++    return h('div', { className: 'hf-dashboard' },
++      h('h2', null, 'Portfolio'),
++      h('div', null,
++        h('strong', null, 'Cash: '), (portfolio.cash || 0).toLocaleString(),
++        h('span', { style: { marginLeft: 16 } }, h('strong', null, 'Total Equity: '), (portfolio.totalEquity || 0).toLocaleString()),
++        h('span', { style: { marginLeft: 16 } }, h('strong', null, 'Unrealized PnL: '), (portfolio.unrealizedPnl || 0).toLocaleString())
++      ),
++      h('h3', null, 'Positions'),
++      h('table', { border: 0, cellPadding: 6, style: { borderCollapse: 'collapse' } },
++        h('thead', null, h('tr', null,
++          h('th', null, 'Symbol'), h('th', null, 'Qty'), h('th', null, 'Avg'), h('th', null, 'Market'), h('th', null, 'Unrealized'), h('th', null, 'Bid'), h('th', null, 'Ask')
++        )),
++        h('tbody', null, (portfolio.positions || []).map(function(pos){
++          var md = marketData[pos.symbol] || {};
++          return h('tr', { key: pos.symbol },
++            h('td', null, pos.symbol),
++            h('td', null, pos.qty),
++            h('td', null, pos.avgPrice),
++            h('td', null, pos.marketPrice != null ? pos.marketPrice : (md.last != null ? md.last : '-')),
++            h('td', null, pos.unrealizedPnl),
++            h('td', null, md.bid != null ? md.bid : '-'),
++            h('td', null, md.ask != null ? md.ask : '-')
++          );
++        }))
++      ),
++      h('h3', null, 'Recent Orders'),
++      h('table', { border: 0, cellPadding: 6, style: { borderCollapse: 'collapse', marginTop: 8 } },
++        h('thead', null, h('tr', null, h('th', null, 'OrderId'), h('th', null, 'Symbol'), h('th', null, 'Qty'), h('th', null, 'Side'), h('th', null, 'Status'), h('th', null, 'Filled'))),
++        h('tbody', null, (orders || []).map(function(o){ return h('tr', { key: o.orderId }, h('td', null, o.orderId), h('td', null, o.symbol), h('td', null, o.qty), h('td', null, o.side), h('td', null, o.status), h('td', null, o.filledQty || 0)); }))
++      ),
++      h('h3', null, 'Quick Trade'),
++      h(QuickTrade, { onPlace: placeOrder })
++    );
++  }
++
++  // Expose render helper
++  global.HedgefundDashboard = {
++    renderTo: function(containerId) {
++      var root = document.getElementById(containerId);
++      if (!root) throw new Error('Container not found: ' + containerId);
++      ReactDOM.createRoot(root).render(React.createElement(HedgefundDashboard));
++    }
++  };
++
++})(window);
++
+*** End Patch
