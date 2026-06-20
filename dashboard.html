@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Hedge Fund Dashboard</title>
+    <!-- Pin exact versions for production -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Your compiled or raw JS component (the file added by the patch) -->
+    <script>
+      // Configure API base and token globally before loading component script
+      window.__HF_API_BASE__ = "https://api.your-hedgefund.com";
+      window.__HF_WS_BASE__ = "wss://api.your-hedgefund.com/v1/stream";
+      // For demo only: set token here or set it dynamically after auth
+      window.__HF_TOKEN__ = localStorage.getItem('hf_token') || '';
+    </script>
+    <script src="/src/components/Hedgefunddashboard.js"></script>
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; }
+      table th { text-align: left; border-bottom: 1px solid #ddd; }
+      table td { padding: 6px 8px; }
+    </style>
+  </head>
+  <body>
+    <div id="hf-root"></div>
+    <script>
+      // Render the dashboard into the container
+      HedgefundDashboard.renderTo('hf-root');
+    </script>
+  </body>
+</html>
